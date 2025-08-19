@@ -1,0 +1,28 @@
+# Azure and Bicep
+*.json.lock
+*.parameters.local.json
+deploymentOutputs.json
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Secrets
+*.pem
+*.cert
+*.key
+
+# Temp files
+*.tmp
+*.bak

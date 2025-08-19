@@ -1,0 +1,23 @@
+﻿#cloud-config
+# Swiss Re Cloud-Init V1
+# Author: Jesus Gracia
+
+hostname: vm-swissre-v1
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - vim
+  - ufw
+  - fail2ban
+
+runcmd:
+  - ufw --force enable
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow from 10.0.0.0/16 to any port 22
+  - echo 'Cloud-init V1 complete' > /var/log/cloud-init-complete
+
+final_message: 'Swiss Re VM V1 ready'

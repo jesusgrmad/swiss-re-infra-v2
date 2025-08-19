@@ -1,0 +1,20 @@
+﻿#cloud-config
+# Swiss Re Cloud-Init V2
+# Author: Jesus Gracia
+
+hostname: vm-swissre-v2
+package_update: true
+
+packages:
+  - apache2
+  - openssl
+  - ufw
+
+runcmd:
+  - a2enmod ssl rewrite
+  - systemctl restart apache2
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - echo 'Cloud-init V2 complete' > /var/log/cloud-init-complete
+
+final_message: 'Swiss Re VM V2 with Apache ready'
