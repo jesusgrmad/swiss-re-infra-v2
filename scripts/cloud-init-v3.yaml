@@ -1,0 +1,19 @@
+﻿#cloud-config
+# Swiss Re Cloud-Init V3 Enterprise
+# Author: Jesus Gracia
+
+hostname: vm-swissre-v3
+package_update: true
+
+packages:
+  - apache2
+  - azure-cli
+  - python3
+  - jq
+
+runcmd:
+  - a2enmod ssl rewrite
+  - systemctl restart apache2
+  - echo 'Cloud-init V3 Enterprise complete' > /var/log/cloud-init-complete
+
+final_message: 'Swiss Re VM V3 Enterprise ready'

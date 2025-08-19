@@ -1,0 +1,38 @@
+# Azure and deployment files
+*.json.lock
+deployment-*.json
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Logs
+*.log
+logs/
+
+# Secrets
+*.pfx
+*.key
+*.pem
+*.crt
+secrets/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+bin/
+obj/
+out/
+
+# Testing
+test-results/
+coverage/
+
+# Author: Jesus Gracia
