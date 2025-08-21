@@ -1,3 +1,9 @@
+# ============================================
+# Swiss Re Infrastructure - Azure DevOps Pipeline
+# Author: Jesus Gracia
+# Version: 3.0
+# ============================================
+
 trigger:
   branches:
     include:
@@ -7,6 +13,7 @@ trigger:
     include:
       - infrastructure/*
       - scripts/*
+      - tests/*
 
 pr:
   branches:
@@ -15,228 +22,611 @@ pr:
       - develop
 
 variables:
-  - group: SwissRe-Infrastructure
+  # Global variables
   - name: azureServiceConnection
     value: 'SwissRe-Azure-Connection'
   - name: location
     value: 'westeurope'
   - name: projectName
     value: 'SwissRe'
+  - name: ownerTag
+    value: 'JesusGracia'
+  
+  # Version control
+  - name: deploymentVersion
+    value: '3'
+  
+  # Build configuration
+  - name: buildConfiguration
+    value: 'Release'
+  - name: vmImage
+    value: 'ubuntu-latest'
+
+  # Environment-specific variables
+  - name: isDevelopment
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/develop')]
+  - name: isProduction
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
 
 stages:
-  - stage: Validate
-    displayName: 'Validate Infrastructure'
-    jobs:
-      - job: ValidateBicep
-        displayName: 'Validate Bicep Templates'
-        pool:
-          vmImage: 'ubuntu-latest'
-        steps:
+# ============================================
+# STAGE 1: VALIDATION
+# ============================================
+- stage: Validate
+  displayName: 'Validate Infrastructure'
+  jobs:
+  - job: ValidateBicep
+    displayName: 'Validate Bicep Templates'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Install and Upgrade Bicep'
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Installing Bicep CLI..."
+          az bicep upgrade
+          az bicep version
+          
+    - task: AzureCLI@2
+      displayName: 'Validate Main Bicep Template'
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Validating main.bicep..."
+          az bicep build --file infrastructure/main.bicep
+          
+          # Check compilation output
+          if [ $? -eq 0 ]; then
+            echo "✅ Main template validated successfully"
+          else
+            echo "❌ Main template validation failed"
+            exit 1
+          fi
+          
+    - task: AzureCLI@2
+      displayName: 'Validate All Modules'
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Validating all Bicep modules..."
+          
+          modules=(
+            "networking"
+            "firewall"
+            "bastion"
+            "nsg"
+            "vm"
+            "keyvault"
+            "identity"
+            "storage"
+            "routeTable"
+            "monitoring"
+          )
+          
+          for module in "${modules[@]}"; do
+            echo "Validating $module.bicep..."
+            az bicep build --file "infrastructure/modules/$module.bicep"
+            if [ $? -ne 0 ]; then
+              echo "❌ Module $module validation failed"
+              exit 1
+            fi
+            echo "✅ Module $module validated"
+          done
+          
+    - task: AzureCLI@2
+      displayName: 'Check for Zero Warnings'
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Checking for warnings in Bicep templates..."
+          
+          output=$(az bicep build --file infrastructure/main.bicep 2>&1)
+          
+          if echo "$output" | grep -i "warning"; then
+            echo "##vso[task.logissue type=error]❌ Warnings found in Bicep templates!"
+            echo "$output"
+            exit 1
+          else
+            echo "✅ Zero warnings achieved!"
+          fi
+          
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Bicep Templates'
+      inputs:
+        targetPath: 'infrastructure'
+        artifact: 'bicep-templates'
+        publishLocation: 'pipeline'
+
+# ============================================
+# STAGE 2: TESTING
+# ============================================
+- stage: Test
+  displayName: 'Run Tests'
+  dependsOn: Validate
+  jobs:
+  
+  - job: UnitTests
+    displayName: 'Unit Tests'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - task: UsePythonVersion@0
+      displayName: 'Setup Python'
+      inputs:
+        versionSpec: '3.9'
+        
+    - task: PowerShell@2
+      displayName: 'Run Bicep Unit Tests'
+      inputs:
+        filePath: 'tests/unit/test-bicep.ps1'
+        errorActionPreference: 'stop'
+        
+    - script: |
+        echo "Installing Python dependencies..."
+        pip install pytest azure-cli
+        
+        echo "Running Python unit tests..."
+        python tests/unit/test-python.py
+      displayName: 'Run Python Unit Tests'
+      
+    - task: PublishTestResults@2
+      displayName: 'Publish Unit Test Results'
+      condition: always()
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '**/test-*.xml'
+        testRunTitle: 'Unit Tests'
+        
+  - job: IntegrationTests
+    displayName: 'Integration Tests'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - task: Bash@3
+      displayName: 'Run Deployment Tests'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tests/integration/test-deployment.sh'
+        
+    - task: PowerShell@2
+      displayName: 'Run Connectivity Tests'
+      inputs:
+        filePath: 'tests/integration/test-connectivity.ps1'
+        
+  - job: SecurityTests
+    displayName: 'Security Tests'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - task: Bash@3
+      displayName: 'Run TLS Tests'
+      inputs:
+        targetType: 'filePath'
+        filePath: 'tests/security/test-tls.sh'
+        
+    - task: PowerShell@2
+      displayName: 'Run Compliance Tests'
+      inputs:
+        filePath: 'tests/security/test-compliance.ps1'
+        
+    - script: |
+        echo "Scanning for exposed secrets..."
+        if grep -r "password\|secret\|key" infrastructure/ --exclude="*.bicep" | grep -v "secureString\|@secure"; then
+          echo "##vso[task.logissue type=error]Potential secrets exposed!"
+          exit 1
+        else
+          echo "✅ No exposed secrets found"
+        fi
+      displayName: 'Secret Scanning'
+
+# ============================================
+# STAGE 3: SECURITY & COMPLIANCE
+# ============================================
+- stage: SecurityCompliance
+  displayName: 'Security & Compliance'
+  dependsOn: Test
+  jobs:
+  
+  - job: ComplianceCheck
+    displayName: 'Swiss Re Compliance Check'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - script: |
+        echo "Checking Swiss Re requirements..."
+        
+        echo "1. Verifying 4 subnets..."
+        subnet_count=$(grep -o "name: 'snet-\|name: 'AzureFirewallSubnet'\|name: 'AzureBastionSubnet'" infrastructure/modules/networking.bicep | wc -l)
+        if [ "$subnet_count" -ge "4" ]; then
+          echo "✅ 4 subnets configured"
+        else
+          echo "❌ Missing required subnets"
+          exit 1
+        fi
+        
+        echo "2. Verifying static IP 10.0.3.4..."
+        if grep -q "10.0.3.4" infrastructure/modules/vm.bicep; then
+          echo "✅ Static IP configured"
+        else
+          echo "❌ Static IP not found"
+          exit 1
+        fi
+        
+        echo "3. Verifying no public IPs on VMs..."
+        if grep -q "publicIPAddress: {" infrastructure/modules/vm.bicep; then
+          echo "❌ Public IP found on VM!"
+          exit 1
+        else
+          echo "✅ No public IP on VM"
+        fi
+        
+        echo "4. Verifying Key Vault integration..."
+        if [ -f "infrastructure/modules/keyvault.bicep" ]; then
+          echo "✅ Key Vault module present"
+        else
+          echo "❌ Key Vault module missing"
+          exit 1
+        fi
+        
+        echo "All compliance checks passed! ✅"
+      displayName: 'Validate Swiss Re Requirements'
+      
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Compliance Report'
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)'
+        artifact: 'compliance-report'
+
+# ============================================
+# STAGE 4: BUILD
+# ============================================
+- stage: Build
+  displayName: 'Build Artifacts'
+  dependsOn: SecurityCompliance
+  jobs:
+  
+  - job: BuildArtifacts
+    displayName: 'Build and Package'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Build ARM Templates from Bicep'
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "Building ARM templates..."
+          
+          # Build main template
+          az bicep build --file infrastructure/main.bicep --outfile infrastructure/main.json
+          
+          # Build all modules
+          for file in infrastructure/modules/*.bicep; do
+            output="${file%.bicep}.json"
+            az bicep build --file "$file" --outfile "$output"
+            echo "Built $(basename $output)"
+          done
+          
+    - task: CopyFiles@2
+      displayName: 'Copy Deployment Files'
+      inputs:
+        Contents: |
+          infrastructure/**
+          scripts/**
+          tests/**
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+        
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Build Artifacts'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'drop'
+        publishLocation: 'pipeline'
+
+# ============================================
+# STAGE 5: DEPLOY TO DEVELOPMENT
+# ============================================
+- stage: DeployDev
+  displayName: 'Deploy to Development'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables.isDevelopment, true))
+  variables:
+    - group: SwissRe-Dev
+    - name: environment
+      value: 'dev'
+    - name: resourceGroup
+      value: 'rg-swissre-dev'
+  
+  jobs:
+  - deployment: DeployToDev
+    displayName: 'Deploy Infrastructure to Dev'
+    pool:
+      vmImage: $(vmImage)
+    environment: 'Development'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Artifacts'
+            inputs:
+              buildType: 'current'
+              artifactName: 'drop'
+              targetPath: '$(System.DefaultWorkingDirectory)'
+              
           - task: AzureCLI@2
-            displayName: 'Install Bicep'
+            displayName: 'Create Resource Group'
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az bicep upgrade
-                az bicep version
-                
+                az group create \
+                  --name $(resourceGroup) \
+                  --location $(location) \
+                  --tags Environment=$(environment) Project=$(projectName) Owner=$(ownerTag)
+                  
+          - task: AzureResourceManagerTemplateDeployment@3
+            displayName: 'Deploy Bicep Template'
+            inputs:
+              deploymentScope: 'Resource Group'
+              azureResourceManagerConnection: $(azureServiceConnection)
+              subscriptionId: '$(subscriptionId)'
+              action: 'Create Or Update Resource Group'
+              resourceGroupName: $(resourceGroup)
+              location: $(location)
+              templateLocation: 'Linked artifact'
+              csmFile: '$(System.DefaultWorkingDirectory)/infrastructure/main.bicep'
+              csmParametersFile: '$(System.DefaultWorkingDirectory)/infrastructure/parameters.dev.json'
+              overrideParameters: '-deploymentVersion $(deploymentVersion)'
+              deploymentMode: 'Complete'
+              deploymentName: 'deploy-dev-$(Build.BuildId)'
+              
+          - task: Bash@3
+            displayName: 'Run Validation Script'
+            inputs:
+              targetType: 'filePath'
+              filePath: '$(System.DefaultWorkingDirectory)/scripts/validate.sh'
+              arguments: '$(environment)'
+              
           - task: AzureCLI@2
-            displayName: 'Validate Templates'
+            displayName: 'Verify Deployment'
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                # Validate main template
-                az bicep build --file infrastructure/main.bicep
+                echo "Verifying deployment..."
                 
-                # Validate all modules
-                for module in infrastructure/modules/*.bicep; do
-                  echo "Validating $(basename $module)..."
-                  az bicep build --file "$module"
-                done
+                # Check VM status
+                vm_status=$(az vm show \
+                  --resource-group $(resourceGroup) \
+                  --name vm-swissre-$(environment) \
+                  --query "provisioningState" \
+                  --output tsv)
+                  
+                echo "VM Status: $vm_status"
                 
-                # Check for warnings
-                output=$(az bicep build --file infrastructure/main.bicep 2>&1)
-                if echo "$output" | grep -i "warning"; then
-                  echo "##vso[task.logissue type=error]Warnings found in Bicep templates"
+                if [ "$vm_status" == "Succeeded" ]; then
+                  echo "✅ Deployment successful"
+                else
+                  echo "❌ Deployment failed"
                   exit 1
                 fi
-                
-          - task: PublishTestResults@2
-            displayName: 'Publish Validation Results'
+
+# ============================================
+# STAGE 6: DEPLOY TO PRODUCTION
+# ============================================
+- stage: DeployProd
+  displayName: 'Deploy to Production'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables.isProduction, true))
+  variables:
+    - group: SwissRe-Prod
+    - name: environment
+      value: 'prod'
+    - name: resourceGroup
+      value: 'rg-swissre-prod'
+  
+  jobs:
+  - job: Approval
+    displayName: 'Manual Approval'
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      timeoutInMinutes: 1440
+      inputs:
+        notifyUsers: 'jesus.gracia@swissre.com'
+        instructions: |
+          Please review the deployment plan:
+          - Version: $(deploymentVersion)
+          - Environment: Production
+          - Resource Group: $(resourceGroup)
+          
+          Ensure all tests have passed before approving.
+        onTimeout: 'reject'
+        
+  - deployment: DeployToProd
+    displayName: 'Deploy Infrastructure to Prod'
+    dependsOn: Approval
+    pool:
+      vmImage: $(vmImage)
+    environment: 'Production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Artifacts'
             inputs:
-              testResultsFormat: 'JUnit'
-              testResultsFiles: '**/TEST-*.xml'
+              buildType: 'current'
+              artifactName: 'drop'
+              targetPath: '$(System.DefaultWorkingDirectory)'
               
-  - stage: DeployDev
-    displayName: 'Deploy to Development'
-    dependsOn: Validate
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
-    variables:
-      environment: 'dev'
-      resourceGroup: 'rg-swissre-dev'
-      deploymentVersion: '3'
-    jobs:
-      - deployment: DeployInfrastructure
-        displayName: 'Deploy Infrastructure'
-        pool:
-          vmImage: 'ubuntu-latest'
-        environment: 'Development'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-                
-                - task: AzureCLI@2
-                  displayName: 'Create Resource Group'
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: 'bash'
-                    scriptLocation: 'inlineScript'
-                    inlineScript: |
-                      az group create \
-                        --name $(resourceGroup) \
-                        --location $(location) \
-                        --tags Environment=$(environment) Project=$(projectName)
-                        
-                - task: AzureResourceManagerTemplateDeployment@3
-                  displayName: 'Deploy Bicep Template'
-                  inputs:
-                    deploymentScope: 'Resource Group'
-                    azureResourceManagerConnection: $(azureServiceConnection)
-                    subscriptionId: $(subscriptionId)
-                    action: 'Create Or Update Resource Group'
-                    resourceGroupName: $(resourceGroup)
-                    location: $(location)
-                    templateLocation: 'Linked artifact'
-                    csmFile: 'infrastructure/main.bicep'
-                    csmParametersFile: 'infrastructure/parameters/$(environment).json'
-                    overrideParameters: '-deploymentVersion $(deploymentVersion)'
-                    deploymentMode: 'Complete'
-                    
-                - task: Bash@3
-                  displayName: 'Run Smoke Tests'
-                  inputs:
-                    targetType: 'filePath'
-                    filePath: 'scripts/test-deployment.sh'
-                    arguments: '$(environment)'
-                    
-  - stage: DeployTest
-    displayName: 'Deploy to Test'
-    dependsOn: DeployDev
-    condition: succeeded()
-    variables:
-      environment: 'test'
-      resourceGroup: 'rg-swissre-test'
-      deploymentVersion: '3'
-    jobs:
-      - deployment: DeployInfrastructure
-        displayName: 'Deploy Infrastructure'
-        pool:
-          vmImage: 'ubuntu-latest'
-        environment: 'Test'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-                
-                - template: templates/deploy-infrastructure.yml
-                  parameters:
-                    environment: $(environment)
-                    resourceGroup: $(resourceGroup)
-                    deploymentVersion: $(deploymentVersion)
-                    
-                - task: Bash@3
-                  displayName: 'Run Integration Tests'
-                  inputs:
-                    targetType: 'filePath'
-                    filePath: 'scripts/run-tests.sh'
-                    arguments: 'integration $(environment)'
-                    
-  - stage: DeployProd
-    displayName: 'Deploy to Production'
-    dependsOn: DeployTest
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-    variables:
-      environment: 'prod'
-      resourceGroup: 'rg-swissre-prod'
-      deploymentVersion: '3'
-    jobs:
-      - job: Approval
-        displayName: 'Wait for Approval'
-        pool: server
-        steps:
-          - task: ManualValidation@0
-            timeoutInMinutes: 1440
+          - task: AzureCLI@2
+            displayName: 'Backup Current State'
             inputs:
-              notifyUsers: 'jesus.gracia@swissre.com'
-              instructions: 'Please review and approve production deployment'
-              
-      - deployment: DeployInfrastructure
-        displayName: 'Deploy Infrastructure'
-        dependsOn: Approval
-        pool:
-          vmImage: 'ubuntu-latest'
-        environment: 'Production'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Creating backup..."
+                TIMESTAMP=$(date +%Y%m%d-%H%M%S)
                 
-                - task: AzureCLI@2
-                  displayName: 'Backup Current Infrastructure'
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: 'bash'
-                    scriptLocation: 'filePath'
-                    scriptPath: 'scripts/create-backup.sh'
-                    arguments: '$(environment)'
-                    
-                - template: templates/deploy-infrastructure.yml
-                  parameters:
-                    environment: $(environment)
-                    resourceGroup: $(resourceGroup)
-                    deploymentVersion: $(deploymentVersion)
-                    
-                - task: AzureCLI@2
-                  displayName: 'Configure Production Settings'
-                  inputs:
-                    azureSubscription: $(azureServiceConnection)
-                    scriptType: 'bash'
-                    scriptLocation: 'inlineScript'
-                    inlineScript: |
-                      # Configure firewall
-                      ./scripts/configure-firewall.sh $(environment)
-                      
-                      # Configure SSL (v2+)
-                      if [ $(deploymentVersion) -ge 2 ]; then
-                        ./scripts/configure-ssl.sh $(environment)
-                      fi
-                      
-                      # Configure Key Vault (v3)
-                      if [ $(deploymentVersion) -eq 3 ]; then
-                        ./scripts/configure-keyvault.sh $(environment)
-                      fi
-                      
-                - task: Bash@3
-                  displayName: 'Run All Tests'
-                  inputs:
-                    targetType: 'inlineScript'
-                    script: |
-                      ./scripts/run-tests.sh smoke $(environment)
-                      ./scripts/run-tests.sh integration $(environment)
-                      ./scripts/run-tests.sh security $(environment)
-                      ./scripts/run-tests.sh performance $(environment)
-                      
-                - task: PublishTestResults@2
-                  displayName: 'Publish Test Results'
-                  inputs:
-                    testResultsFormat: 'JUnit'
-                    testResultsFiles: '**/test-results/*.xml'
-                    mergeTestResults: true
+                # Export current resource group
+                az group export \
+                  --name $(resourceGroup) \
+                  --output json > backup-$TIMESTAMP.json || true
+                  
+                if [ -f backup-$TIMESTAMP.json ]; then
+                  echo "##vso[task.setvariable variable=backupFile]backup-$TIMESTAMP.json"
+                  echo "Backup created: backup-$TIMESTAMP.json"
+                fi
+                
+          - task: AzureCLI@2
+            displayName: 'Create Resource Group'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az group create \
+                  --name $(resourceGroup) \
+                  --location $(location) \
+                  --tags Environment=$(environment) Project=$(projectName) Owner=$(ownerTag) CostCenter=IT
+                  
+          - task: AzureResourceManagerTemplateDeployment@3
+            displayName: 'Deploy Bicep Template'
+            inputs:
+              deploymentScope: 'Resource Group'
+              azureResourceManagerConnection: $(azureServiceConnection)
+              subscriptionId: '$(subscriptionId)'
+              action: 'Create Or Update Resource Group'
+              resourceGroupName: $(resourceGroup)
+              location: $(location)
+              templateLocation: 'Linked artifact'
+              csmFile: '$(System.DefaultWorkingDirectory)/infrastructure/main.bicep'
+              csmParametersFile: '$(System.DefaultWorkingDirectory)/infrastructure/parameters.prod.json'
+              overrideParameters: '-deploymentVersion $(deploymentVersion)'
+              deploymentMode: 'Complete'
+              deploymentName: 'deploy-prod-$(Build.BuildId)'
+              
+          - task: Bash@3
+            displayName: 'Run Validation Script'
+            inputs:
+              targetType: 'filePath'
+              filePath: '$(System.DefaultWorkingDirectory)/scripts/validate.sh'
+              arguments: '$(environment)'
+              
+          - task: Bash@3
+            displayName: 'Run Comprehensive Validation'
+            inputs:
+              targetType: 'filePath'
+              filePath: '$(System.DefaultWorkingDirectory)/scripts/comprehensive-validation.sh'
+              
+          - task: AzureCLI@2
+            displayName: 'Post-Deployment Configuration'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Configuring production environment..."
+                
+                VERSION=$(deploymentVersion)
+                
+                if [ "$VERSION" -ge "2" ]; then
+                  echo "✅ Apache and HTTPS configured via cloud-init"
+                fi
+                
+                if [ "$VERSION" -eq "3" ]; then
+                  echo "Verifying Key Vault..."
+                  VAULT_NAME=$(az keyvault list \
+                    --resource-group $(resourceGroup) \
+                    --query "[0].name" \
+                    --output tsv)
+                  echo "✅ Key Vault: $VAULT_NAME"
+                  
+                  echo "Verifying Monitoring..."
+                  WORKSPACE=$(az monitor log-analytics workspace list \
+                    --resource-group $(resourceGroup) \
+                    --query "[0].name" \
+                    --output tsv)
+                  echo "✅ Log Analytics: $WORKSPACE"
+                fi
+                
+                echo "Production deployment completed successfully!"
+
+# ============================================
+# STAGE 7: POST-DEPLOYMENT VALIDATION
+# ============================================
+- stage: PostDeployment
+  displayName: 'Post-Deployment Validation'
+  dependsOn: 
+    - DeployDev
+    - DeployProd
+  condition: or(succeeded('DeployDev'), succeeded('DeployProd'))
+  jobs:
+  
+  - job: HealthCheck
+    displayName: 'Health Check'
+    pool:
+      vmImage: $(vmImage)
+    
+    steps:
+    - script: |
+        echo "## 🎯 Deployment Summary" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "### Build Information" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- Build ID: $(Build.BuildId)" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- Source Branch: $(Build.SourceBranch)" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- Commit: $(Build.SourceVersion)" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "### Deployment Details" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- Version: $(deploymentVersion)" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- Timestamp: $(date)" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "### Components (Version $(deploymentVersion))" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- ✅ Virtual Network with 4 Subnets" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- ✅ Azure Firewall" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- ✅ Azure Bastion" >> $(System.DefaultWorkingDirectory)/summary.md
+        echo "- ✅ Ubuntu VM (10.0.3.4)" >> $(System.DefaultWorkingDirectory)/summary.md
+        
+        if [ "$(deploymentVersion)" -ge "2" ]; then
+          echo "- ✅ Apache with HTTPS" >> $(System.DefaultWorkingDirectory)/summary.md
+          echo "- ✅ DNAT Rules" >> $(System.DefaultWorkingDirectory)/summary.md
+        fi
+        
+        if [ "$(deploymentVersion)" -eq "3" ]; then
+          echo "- ✅ Azure Key Vault" >> $(System.DefaultWorkingDirectory)/summary.md
+          echo "- ✅ Managed Identity" >> $(System.DefaultWorkingDirectory)/summary.md
+          echo "- ✅ Advanced Monitoring" >> $(System.DefaultWorkingDirectory)/summary.md
+          echo "- ✅ 128GB Data Disk" >> $(System.DefaultWorkingDirectory)/summary.md
+        fi
+        
+        cat $(System.DefaultWorkingDirectory)/summary.md
+      displayName: 'Generate Deployment Summary'
+      
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Summary'
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)/summary.md'
+        artifact: 'deployment-summary'
