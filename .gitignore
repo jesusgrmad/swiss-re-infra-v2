@@ -1,38 +1,174 @@
-# Azure and deployment files
-*.json.lock
-deployment-*.json
+# ============================================
+# Swiss Re Infrastructure - Git Ignore File
+# ============================================
+
+# Azure and Bicep files
+*.azurecli
+*.azcli
+deployment-outputs.json
+outputs.json
+*.deployment
+
+# Parameter files with secrets
+parameters.local.json
+parameters.*.local.json
+*.parameters.local.json
+
+# Backup files
+*.backup
+*.bak
+backup-*.json
+snapshots/
+
+# Terraform state (if using Terraform as alternative)
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
 .terraform/
+.terraform.lock.hcl
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Keys and certificates
+*.key
+*.pem
+*.pfx
+*.crt
+*.cer
+*.p12
+certificates/
+certs/
+ssl/
+
+# Secrets and credentials
+secrets/
+credentials/
+*.secret
+*.secrets
+vault-secrets.json
+azure-credentials.json
 
 # Logs
 *.log
 logs/
+*.logs
+debug.log
+error.log
 
-# Secrets
-*.pfx
-*.key
-*.pem
-*.crt
-secrets/
+# Test outputs
+test-results/
+coverage/
+*.coverage
+.coverage
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
 
-# IDE
-.vscode/
+# IDE and editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
 .idea/
 *.swp
 *.swo
-
-# OS
+*~
 .DS_Store
 Thumbs.db
 
-# Build
+# Build artifacts
+build/
+dist/
+out/
 bin/
 obj/
-out/
+*.exe
+*.dll
+*.so
 
-# Testing
-test-results/
-coverage/
+# Node modules (if using Node.js tools)
+node_modules/
+npm-debug.log
+yarn-error.log
 
-# Author: Jesus Gracia
+# Python
+venv/
+env/
+ENV/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+*.pdf
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Monitoring and metrics
+metrics/
+grafana-data/
+prometheus-data/
+
+# Docker volumes (local testing)
+volumes/
+data/
+
+# Exclude specific sensitive parameter values
+!infrastructure/parameters.dev.json
+!infrastructure/parameters.prod.json
+# But exclude any with 'secret' or 'password' in name
+*secret*.json
+*password*.json
+
+# Deployment artifacts
+deployments/
+artifacts/
+
+# Cache
+.cache/
+cache/
+
+# Session files
+session-*.json
+.session
+
+# Azure CLI
+.azure/
+
+# Validation outputs
+validation-results/
+compliance-reports/
+
+# Temporary cloud-init files
+cloud-init-*.tmp.yaml
+user-data.txt
+
+# Local testing
+local-test/
+.localstack/
