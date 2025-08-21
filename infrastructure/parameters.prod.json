@@ -1,26 +1,36 @@
 {
-    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-    "contentVersion": "1.0.0.0",
-    "parameters": {
-        "environment": {
-            "value": "prod"
-        },
-        "deploymentVersion": {
-            "value": 3
-        },
-        "adminUsername": {
-            "value": "azureadmin"
-        },
-        "adminPassword": {
-            "reference": {
-                "keyVault": {
-                    "id": "/subscriptions/{subscription-id}/resourceGroups/rg-secrets/providers/Microsoft.KeyVault/vaults/kv-secrets"
-                },
-                "secretName": "vm-admin-password"
-            }
-        },
-        "vmSize": {
-            "value": "Standard_D2s_v3"
-        }
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "westeurope"
+    },
+    "environment": {
+      "value": "prod"
+    },
+    "deploymentVersion": {
+      "value": 3
+    },
+    "adminUsername": {
+      "value": "swissreadmin"
+    },
+    "tags": {
+      "value": {
+        "Environment": "prod",
+        "Project": "SwissRe-Challenge",
+        "Owner": "Infrastructure-Team",
+        "CostCenter": "IT-Production",
+        "ManagedBy": "Bicep",
+        "Version": "3.0.0",
+        "CreatedBy": "Jesus.Gracia",
+        "Purpose": "Production",
+        "Compliance": "CIS-Azure-ISO27001",
+        "BackupPolicy": "Daily",
+        "MaintenanceWindow": "Sun-02:00-06:00-UTC",
+        "DataClassification": "Confidential",
+        "DisasterRecovery": "Enabled",
+        "SLA": "99.9"
+      }
     }
+  }
 }
