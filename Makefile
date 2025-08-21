@@ -76,7 +76,7 @@ setup: ## Install required tools and dependencies
 	@command -v az >/dev/null 2>&1 || { echo "$(RED)Azure CLI not installed$(NC)"; exit 1; }
 	@command -v bicep >/dev/null 2>&1 || az bicep install
 	@command -v python3 >/dev/null 2>&1 || { echo "$(RED)Python 3 not installed$(NC)"; exit 1; }
-	@pip3 install -q pytest azure-identity azure-keyvault-secrets 2>/dev/null || true
+	@pip3 install -q pytest azure-identity azure-keyvault-secrets requests 2>/dev/null || true
 	@echo "$(GREEN)✓ Setup complete$(NC)"
 
 .PHONY: check-tools
@@ -165,7 +165,7 @@ lint: ## Run linters on all code
 # Testing Targets
 # ============================================
 .PHONY: test
-test: test-unit test-integration test-security ## Run all tests
+test: test-unit test-integration test-security test-compliance ## Run all tests
 	@echo "$(GREEN)✓ All tests passed!$(NC)"
 
 .PHONY: test-unit
@@ -230,7 +230,8 @@ deploy-infrastructure: ## Deploy infrastructure
 		--template-file $(BICEP_FILE) \
 		--parameters $(PARAM_FILE) \
 		--parameters deploymentVersion=$(DEPLOYMENT_VERSION) \
-		--mode Complete \
+		--parameters adminPassword=$${ADMIN_PASSWORD:-ComplexP@ssw0rd!2025} \
+		--mode Incremental \
 		--output none
 	@echo "$(GREEN)✓ Infrastructure deployed$(NC)"
 
@@ -247,7 +248,8 @@ what-if: validate ## Preview deployment changes
 		--resource-group $(RESOURCE_GROUP) \
 		--template-file $(BICEP_FILE) \
 		--parameters $(PARAM_FILE) \
-		--parameters deploymentVersion=$(DEPLOYMENT_VERSION)
+		--parameters deploymentVersion=$(DEPLOYMENT_VERSION) \
+		--parameters adminPassword=$${ADMIN_PASSWORD:-ComplexP@ssw0rd!2025}
 
 .PHONY: rollback
 rollback: ## Rollback to last successful deployment
@@ -261,7 +263,7 @@ rollback: ## Rollback to last successful deployment
 		az deployment group create \
 			--name "rollback-$(shell date +%s)" \
 			--resource-group $(RESOURCE_GROUP) \
-			--template-spec "$$LAST_DEPLOYMENT" \
+			--template-uri "$$(az deployment group export --name $$LAST_DEPLOYMENT --resource-group $(RESOURCE_GROUP) --query 'template' -o json | jq -r)" \
 			--mode Complete; \
 	else \
 		echo "$(RED)No successful deployment found$(NC)"; \
@@ -277,7 +279,7 @@ status: ## Check deployment status
 	@az vm show \
 		--resource-group $(RESOURCE_GROUP) \
 		--name vm-swissre-$(ENV) \
-		--query "{Name:name, Status:provisioningState, PowerState:instanceView.powerState.displayStatus}" \
+		--query "{Name:name, Status:provisioningState, PowerState:instanceView.statuses[1].displayStatus}" \
 		--output table 2>/dev/null || echo "$(YELLOW)VM not found$(NC)"
 
 .PHONY: logs
