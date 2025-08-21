@@ -122,7 +122,7 @@ Network Flow:
 ### Step-by-Step Deployment
 
     # 1. Clone the repository
-    git clone https://github.com/jesusgrmad/swissre.git
+    git clone [https://github.com/jesusgrmad/swiss-re-infra-v2.git]
     cd swissre
 
     # 2. Login to Azure
