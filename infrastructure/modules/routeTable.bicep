@@ -1,14 +1,26 @@
-// Module: Route Table
-// Author: Jesus Gracia
+// ============================================================================
+// Route Table Module - Swiss Re Infrastructure
+// Forces all traffic through Azure Firewall
+// ============================================================================
 
+@description('Azure region for resources')
 param location string
-param rtName string
-param firewallPrivateIp string
-param vmSubnetId string
-param tags object = {}
 
-resource routeTable 'Microsoft.Network/routeTables@2023-06-01' = {
-  name: rtName
+@description('Route table name')
+param routeTableName string
+
+@description('Firewall private IP address')
+param firewallPrivateIp string
+
+@description('Resource tags')
+param tags object
+
+// ============================================================================
+// ROUTE TABLE
+// ============================================================================
+
+resource routeTable 'Microsoft.Network/routeTables@2023-05-01' = {
+  name: routeTableName
   location: location
   tags: tags
   properties: {
@@ -25,6 +37,10 @@ resource routeTable 'Microsoft.Network/routeTables@2023-06-01' = {
     ]
   }
 }
+
+// ============================================================================
+// OUTPUTS
+// ============================================================================
 
 output id string = routeTable.id
 output name string = routeTable.name
