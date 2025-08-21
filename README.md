@@ -36,7 +36,7 @@ This repository delivers a **world-class, production-ready Azure infrastructure 
 📍 **Location:** Madrid, Spain  
 💼 **LinkedIn:** [linkedin.com/in/jesus-gracia-7a64084](https://linkedin.com/in/jesus-gracia-7a64084)  
 💻 **GitHub:** [github.com/jesusgrmad](https://github.com/jesusgrmad)  
-📧 **Email:** jesus.gracia@example.com  
+📧 **Email:** jesusgmad@gmail.com
 📅 **Submission:** August 19, 2025  
 
 </td>
@@ -65,82 +65,90 @@ This repository delivers a **world-class, production-ready Azure infrastructure 
 ## 🌟 Solution Highlights
 
 ### 🔹 **Three Progressive Deployment Versions**
-
 <table>
 <tr>
-<td align="center" width="33%">
+<td align="left" width="33%">
 
 #### Version 1️⃣
+  
 **Foundation**
+
 - ✅ Virtual Network (4 Subnets)
 - ✅ Azure Firewall
 - ✅ Azure Bastion
 - ✅ Ubuntu VM
 - ✅ Security Hardening
-
 </td>
-<td align="center" width="33%">
+<td align="left" width="33%">
 
 #### Version 2️⃣
+  
 **Web Services**
+
 - ✅ All V1 Features
 - ✅ Apache HTTP Server
 - ✅ HTTPS Configuration
 - ✅ DNAT Rules
 - ✅ Custom Domain Ready
-
 </td>
-<td align="center" width="33%">
+<td align="left" width="33%">
 
 #### Version 3️⃣
+  
 **Enterprise**
+
 - ✅ All V2 Features
 - ✅ Azure Key Vault
 - ✅ Managed Identity
 - ✅ 128GB Data Disk
 - ✅ Advanced Monitoring
-
 </td>
 </tr>
 </table>
 
+---
+
 ### 🔹 **Zero-Trust Security Architecture**
 
-```mermaidgraph LR
-A[🌐 Internet] -->|Firewall| B[🔥 Azure Firewall]
-B -->|DNAT| C[🖥️ VM 10.0.3.4]
-D[👤 Admin] -->|Secure| E[🔐 Azure Bastion]
-E -->|SSH| C
-C -->|MI| F[🔑 Key Vault]
-C -->|Logs| G[📊 Log Analytics]
+```mermaid
+graph LR
+
+A[🌐 Internet] ---> |Firewall| B[🔥 Azure Firewall]
+B ----------------> |DNAT| C[🖥️ VM 10.0.3.4]
+D[👤 Admin] ------> |Secure| E[🔐 Azure Bastion]
+E ----------------> |SSH| C
+C ----------------> |MI| F[🔑 Key Vault]
+C ----------------> |Logs| G[📊 Log Analytics]
 
 ### 🔹 **Enterprise Features Matrix**
 
-| 🏢 **Category** | ⚙️ **Feature** | ✅ **Status** |
-|:---------------:|:--------------:|:-------------:|
-| **Infrastructure** | 100% Infrastructure as Code (Bicep) | ✅ Implemented |
-| **Security** | Zero Trust + Defense in Depth | ✅ Implemented |
-| **Compliance** | ISO 27001, CIS, GDPR Ready | ✅ Implemented |
-| **Monitoring** | Log Analytics + Alerts | ✅ Implemented |
-| **Automation** | CI/CD Pipeline Ready | ✅ Implemented |
-| **Disaster Recovery** | Backup + Restore Procedures | ✅ Implemented |
-| **Scalability** | Auto-scaling Architecture | ✅ Ready |
-| **Cost Management** | Optimization Strategies | ✅ Implemented |
+```mermaid
+graph LR
+| 🏢 **Category**      | ⚙️ **Feature**                       | ✅ **Status**  |
+|:---------------------:|:------------------------------------:|:--------------:|
+| **Infrastructure**    | 100% Infrastructure as Code (Bicep)  | ✅ Implemented |
+| **Security**          | Zero Trust + Defense in Depth        | ✅ Implemented |
+| **Compliance**        | ISO 27001, CIS, GDPR Ready           | ✅ Implemented |
+| **Monitoring**        | Log Analytics + Alerts               | ✅ Implemented |
+| **Automation**        | CI/CD Pipeline Ready                 | ✅ Implemented |
+| **Disaster Recovery** | Backup + Restore Procedures          | ✅ Implemented |
+| **Scalability**       | Auto-scaling Architecture            | ✅ Ready |
+| **Cost Management**   | Optimization Strategies              | ✅ Implemented |
 
----
 
 ## 🚀 Quick Start Guide
 
 ### Prerequisites
 
-```bash✓ Azure CLI v2.50+ (with Bicep extension)
+✓ Azure CLI v2.50+ (with Bicep extension)
 ✓ Git v2.30+
 ✓ Azure Subscription (Contributor role)
 ✓ PowerShell 7+ or Bash
 
 ### ⚡ One-Command Deployment
 
-```bashClone and deploy in under 60 seconds
+Clone and deploy in under 60 seconds
+#!/bin/bash
 git clone https://github.com/jesusgrmad/swissre.git && 
 cd swissre && 
 ./scripts/deploy.sh prod 3
@@ -150,16 +158,22 @@ cd swissre &&
 <details>
 <summary><b>Click to expand detailed instructions</b></summary>
 
-```bash1️⃣ Clone the repository
+1️⃣ Clone the repository
+#!/bin/bash
 git clone https://github.com/jesusgrmad/swissre.git
-cd swissre2️⃣ Login to Azure
+cd swissre
+2️⃣ Login to Azure
 az login
-az account set --subscription <subscription-id>3️⃣ Validate templates (Zero warnings guaranteed)
-az bicep build --file infrastructure/main.bicep4️⃣ Deploy infrastructure
+az account set --subscription <subscription-id>
+3️⃣ Validate templates (Zero warnings guaranteed)
+az bicep build --file infrastructure/main.bicep
+4️⃣ Deploy infrastructure
 ./scripts/deploy.sh dev 3   # Development environment
 ./scripts/deploy.sh test 2  # Testing environment
-./scripts/deploy.sh prod 3  # Production environment5️⃣ Verify deployment
-./scripts/health-check.sh prod6️⃣ Access the application
+./scripts/deploy.sh prod 3  # Production environment
+5️⃣ Verify deployment
+./scripts/health-check.sh prod
+6️⃣ Access the application
 echo "https://$(az network public-ip show -g rg-swissre-prod -n pip-firewall --query ipAddress -o tsv)"
 
 </details>
