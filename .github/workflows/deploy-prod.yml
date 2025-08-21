@@ -1,0 +1,229 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infrastructure/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Deployment version (1, 2, or 3)'
+        required: true
+        default: '3'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+      confirm:
+        description: 'Type "DEPLOY" to confirm production deployment'
+        required: true
+
+env:
+  ENVIRONMENT: prod
+  RESOURCE_GROUP: rg-swissre-prod
+  LOCATION: westeurope
+  DEPLOYMENT_VERSION: ${{ github.event.inputs.version || '3' }}
+
+jobs:
+  validate:
+    name: Pre-Deployment Validation
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DEPLOY' || github.event_name == 'push'
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Validate Templates
+        run: |
+          az bicep build --file infrastructure/main.bicep
+          
+      - name: Security Scan
+        run: |
+          pip install checkov
+          checkov -d infrastructure --framework bicep
+          
+  backup:
+    name: Backup Current Infrastructure
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: production
+    
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS_PROD }}
+          
+      - name: Create Backup
+        run: |
+          echo "💾 Creating infrastructure backup..."
+          timestamp=$(date +%Y%m%d-%H%M%S)
+          
+          # Export current template
+          az group export \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --output-folder ./backup-$timestamp || true
+            
+          # Create snapshots
+          ./scripts/create-snapshots.sh ${{ env.ENVIRONMENT }}
+          
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: backup
+    environment: production
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS_PROD }}
+          
+      - name: Create Resource Group
+        run: |
+          az group create \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }} \
+            --tags Environment=Production Project=SwissRe Owner=JesusGracia CostCenter=IT
+            
+      - name: Deploy Infrastructure
+        run: |
+          echo "🚀 Deploying version ${{ env.DEPLOYMENT_VERSION }} to Production..."
+          
+          deployment_name="deploy-prod-$(date +%Y%m%d-%H%M%S)"
+          
+          az deployment group create \
+            --name $deployment_name \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file infrastructure/main.bicep \
+            --parameters @infrastructure/parameters/prod.json \
+            --parameters deploymentVersion=${{ env.DEPLOYMENT_VERSION }} \
+            --mode Complete \
+            --rollback-on-error
+            
+      - name: Configure Production Settings
+        run: |
+          echo "⚙️ Configuring production settings..."
+          
+          # Configure firewall rules
+          ./scripts/configure-firewall.sh ${{ env.ENVIRONMENT }}
+          
+          # Configure SSL certificates
+          if [ "${{ env.DEPLOYMENT_VERSION }}" -ge "2" ]; then
+            ./scripts/configure-ssl.sh ${{ env.ENVIRONMENT }}
+          fi
+          
+          # Configure Key Vault
+          if [ "${{ env.DEPLOYMENT_VERSION }}" -eq "3" ]; then
+            ./scripts/configure-keyvault.sh ${{ env.ENVIRONMENT }}
+          fi
+          
+      - name: Run Integration Tests
+        run: |
+          echo "🧪 Running integration tests..."
+          ./scripts/run-tests.sh integration ${{ env.ENVIRONMENT }}
+          
+      - name: Performance Tests
+        run: |
+          echo "⚡ Running performance tests..."
+          ./scripts/run-tests.sh performance ${{ env.ENVIRONMENT }}
+          
+      - name: Security Validation
+        run: |
+          echo "🔒 Running security validation..."
+          ./scripts/security-check.sh ${{ env.ENVIRONMENT }}
+          
+      - name: Health Check
+        run: |
+          echo "❤️ Running comprehensive health check..."
+          ./scripts/health-check.sh ${{ env.ENVIRONMENT }} --detailed
+          
+      - name: Update DNS
+        if: success()
+        run: |
+          echo "🌐 Updating DNS records..."
+          ./scripts/update-dns.sh ${{ env.ENVIRONMENT }}
+          
+      - name: Enable Monitoring
+        if: env.DEPLOYMENT_VERSION == '3'
+        run: |
+          echo "📊 Enabling production monitoring..."
+          ./scripts/configure-monitoring.sh ${{ env.ENVIRONMENT }} --alerts
+          
+      - name: Create Deployment Report
+        if: always()
+        run: |
+          echo "## 🚀 Production Deployment Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ env.DEPLOYMENT_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Resource Group:** ${{ env.RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Location:** ${{ env.LOCATION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Virtual Network with 4 Subnets" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Azure Firewall" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Azure Bastion" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Ubuntu VM (10.0.3.4)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ env.DEPLOYMENT_VERSION }}" -ge "2" ]; then
+            echo "- ✅ Apache with HTTPS" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ DNAT Rules" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ env.DEPLOYMENT_VERSION }}" -eq "3" ]; then
+            echo "- ✅ Key Vault" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Managed Identity" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ 128GB Data Disk" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Advanced Monitoring" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+      - name: Send Notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Production Deployment ${{ job.status }}
+            Version: ${{ env.DEPLOYMENT_VERSION }}
+            Deployed by: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: failure()
+    environment: production
+    
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS_PROD }}
+          
+      - name: Initiate Rollback
+        run: |
+          echo "⚠️ Deployment failed. Initiating rollback..."
+          
+          # Get last successful deployment
+          last_successful=$(az deployment group list \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query "[?properties.provisioningState=='Succeeded'] | [0].name" \
+            --output tsv)
+            
+          echo "Rolling back to: $last_successful"
+          
+          # Trigger rollback
+          az deployment group create \
+            --name "rollback-$(date +%Y%m%d-%H%M%S)" \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --rollback-to-last-successful
