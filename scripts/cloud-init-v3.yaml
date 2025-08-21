@@ -1,19 +1,476 @@
-﻿#cloud-config
-# Swiss Re Cloud-Init V3 Enterprise
+#cloud-config
+# Swiss Re Infrastructure Challenge - Cloud Init Configuration
+# Version: 3.0 (Enterprise with Key Vault, Monitoring, and Data Disk)
 # Author: Jesus Gracia
 
-hostname: vm-swissre-v3
+# System Updates and Package Installation
 package_update: true
-
+package_upgrade: true
 packages:
+  # Core packages
+  - curl
+  - wget
+  - git
+  - vim
+  - htop
+  - net-tools
+  - software-properties-common
+  - apt-transport-https
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  # Security packages
+  - ufw
+  - fail2ban
+  - aide
+  - rkhunter
+  - clamav
+  - clamav-daemon
+  # Apache and SSL
   - apache2
-  - azure-cli
+  - libapache2-mod-security2
+  - libapache2-mod-evasive
+  - certbot
+  - python3-certbot-apache
+  # Python for Key Vault integration
   - python3
+  - python3-pip
+  - python3-venv
+  # Monitoring
+  - azure-cli
   - jq
 
-runcmd:
-  - a2enmod ssl rewrite
-  - systemctl restart apache2
-  - echo 'Cloud-init V3 Enterprise complete' > /var/log/cloud-init-complete
+# Users and Groups
+users:
+  - name: swissre
+    groups: sudo, www-data
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... swissre@azure
 
-final_message: 'Swiss Re VM V3 Enterprise ready'
+# File System - Mount data disk (Version 3)
+disk_setup:
+  /dev/disk/azure/scsi1/lun0:
+    table_type: gpt
+    layout: true
+    overwrite: false
+
+fs_setup:
+  - device: /dev/disk/azure/scsi1/lun0-part1
+    filesystem: ext4
+    label: data
+    extra_opts: ["-F", "-E", "lazy_itable_init=1,lazy_journal_init=1"]
+
+mounts:
+  - ["/dev/disk/azure/scsi1/lun0-part1", "/data", "ext4", "defaults,nofail", "0", "2"]
+
+# Write Files
+write_files:
+  # Apache configuration for HTTPS
+  - path: /etc/apache2/sites-available/swissre-ssl.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      <VirtualHost *:443>
+          ServerName swissre.azure
+          DocumentRoot /data/www/html
+          
+          # SSL Configuration
+          SSLEngine on
+          SSLCertificateFile /etc/ssl/certs/swissre.crt
+          SSLCertificateKeyFile /etc/ssl/private/swissre.key
+          SSLProtocol -all +TLSv1.2 +TLSv1.3
+          SSLCipherSuite HIGH:!aNULL:!MD5:!3DES
+          SSLHonorCipherOrder on
+          
+          # Security Headers
+          Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+          Header always set X-Frame-Options "SAMEORIGIN"
+          Header always set X-Content-Type-Options "nosniff"
+          Header always set X-XSS-Protection "1; mode=block"
+          Header always set Content-Security-Policy "default-src 'self'"
+          Header always set Referrer-Policy "strict-origin-when-cross-origin"
+          
+          # Logging
+          ErrorLog ${APACHE_LOG_DIR}/error-ssl.log
+          CustomLog ${APACHE_LOG_DIR}/access-ssl.log combined
+          
+          <Directory /data/www/html>
+              Options -Indexes +FollowSymLinks
+              AllowOverride All
+              Require all granted
+          </Directory>
+      </VirtualHost>
+
+  # Key Vault retrieval script
+  - path: /usr/local/bin/keyvault-retriever.py
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      """
+      Azure Key Vault Secret Retriever for Swiss Re Infrastructure
+      Uses Managed Identity to retrieve secrets from Key Vault
+      """
+      
+      import os
+      import sys
+      import json
+      import logging
+      import requests
+      from datetime import datetime
+      from typing import Dict, Optional
+      
+      # Configure logging
+      logging.basicConfig(
+          level=logging.INFO,
+          format='%(asctime)s - %(levelname)s - %(message)s',
+          handlers=[
+              logging.FileHandler('/var/log/keyvault-retriever.log'),
+              logging.StreamHandler()
+          ]
+      )
+      logger = logging.getLogger(__name__)
+      
+      class KeyVaultRetriever:
+          """Retrieves secrets from Azure Key Vault using Managed Identity"""
+          
+          def __init__(self, vault_name: str):
+              self.vault_name = vault_name
+              self.vault_url = f"https://{vault_name}.vault.azure.net"
+              self.api_version = "7.3"
+              self.token = None
+              
+          def get_access_token(self) -> str:
+              """Get access token from Azure Instance Metadata Service"""
+              try:
+                  # IMDS endpoint for managed identity
+                  url = "http://169.254.169.254/metadata/identity/oauth2/token"
+                  params = {
+                      'api-version': '2018-02-01',
+                      'resource': 'https://vault.azure.net'
+                  }
+                  headers = {'Metadata': 'true'}
+                  
+                  response = requests.get(url, params=params, headers=headers, timeout=10)
+                  response.raise_for_status()
+                  
+                  token_data = response.json()
+                  self.token = token_data['access_token']
+                  logger.info("Successfully obtained access token")
+                  return self.token
+                  
+              except Exception as e:
+                  logger.error(f"Failed to get access token: {str(e)}")
+                  raise
+                  
+          def get_secret(self, secret_name: str) -> str:
+              """Retrieve a secret from Key Vault"""
+              try:
+                  if not self.token:
+                      self.get_access_token()
+                      
+                  url = f"{self.vault_url}/secrets/{secret_name}"
+                  params = {'api-version': self.api_version}
+                  headers = {'Authorization': f'Bearer {self.token}'}
+                  
+                  response = requests.get(url, params=params, headers=headers, timeout=10)
+                  response.raise_for_status()
+                  
+                  secret_data = response.json()
+                  logger.info(f"Successfully retrieved secret: {secret_name}")
+                  return secret_data['value']
+                  
+              except Exception as e:
+                  logger.error(f"Failed to retrieve secret {secret_name}: {str(e)}")
+                  raise
+                  
+          def save_certificate(self, cert_name: str, cert_path: str, key_path: str):
+              """Retrieve and save SSL certificate and private key"""
+              try:
+                  # Get certificate bundle from Key Vault
+                  cert_bundle = self.get_secret(cert_name)
+                  
+                  # Parse the certificate bundle (assuming PEM format)
+                  if '-----BEGIN CERTIFICATE-----' in cert_bundle:
+                      cert_start = cert_bundle.index('-----BEGIN CERTIFICATE-----')
+                      cert_end = cert_bundle.index('-----END CERTIFICATE-----') + len('-----END CERTIFICATE-----')
+                      certificate = cert_bundle[cert_start:cert_end]
+                      
+                      key_start = cert_bundle.index('-----BEGIN PRIVATE KEY-----')
+                      key_end = cert_bundle.index('-----END PRIVATE KEY-----') + len('-----END PRIVATE KEY-----')
+                      private_key = cert_bundle[key_start:key_end]
+                  else:
+                      # If it's a JSON bundle
+                      cert_data = json.loads(cert_bundle)
+                      certificate = cert_data.get('certificate', '')
+                      private_key = cert_data.get('privateKey', '')
+                  
+                  # Save certificate
+                  with open(cert_path, 'w') as f:
+                      f.write(certificate)
+                  os.chmod(cert_path, 0o644)
+                  logger.info(f"Certificate saved to {cert_path}")
+                  
+                  # Save private key
+                  with open(key_path, 'w') as f:
+                      f.write(private_key)
+                  os.chmod(key_path, 0o600)
+                  logger.info(f"Private key saved to {key_path}")
+                  
+              except Exception as e:
+                  logger.error(f"Failed to save certificate: {str(e)}")
+                  raise
+      
+      def main():
+          """Main execution function"""
+          try:
+              # Get vault name from environment or metadata
+              vault_name = os.environ.get('KEY_VAULT_NAME')
+              
+              if not vault_name:
+                  # Try to get from instance metadata tags
+                  logger.warning("KEY_VAULT_NAME not set, using default pattern")
+                  vault_name = 'kv-swissre-prod'
+              
+              logger.info(f"Using Key Vault: {vault_name}")
+              
+              # Initialize retriever
+              retriever = KeyVaultRetriever(vault_name)
+              
+              # Retrieve and save SSL certificate
+              retriever.save_certificate(
+                  cert_name='ssl-certificate',
+                  cert_path='/etc/ssl/certs/swissre.crt',
+                  key_path='/etc/ssl/private/swissre.key'
+              )
+              
+              logger.info("Key Vault retrieval completed successfully")
+              return 0
+              
+          except Exception as e:
+              logger.error(f"Script failed: {str(e)}")
+              # Generate self-signed certificate as fallback
+              logger.info("Generating self-signed certificate as fallback")
+              os.system('openssl req -x509 -nodes -days 365 -newkey rsa:2048 '
+                       '-keyout /etc/ssl/private/swissre.key '
+                       '-out /etc/ssl/certs/swissre.crt '
+                       '-subj "/C=CH/ST=Zurich/L=Zurich/O=SwissRe/CN=swissre.azure"')
+              return 1
+      
+      if __name__ == "__main__":
+          sys.exit(main())
+
+  # Monitoring setup script
+  - path: /usr/local/bin/setup-monitoring.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      
+      # Install Log Analytics agent
+      wget https://raw.githubusercontent.com/Microsoft/OMS-Agent-for-Linux/master/installer/scripts/onboard_agent.sh
+      sh onboard_agent.sh -w ${WORKSPACE_ID} -s ${WORKSPACE_KEY} -d opinsights.azure.com
+      
+      # Configure custom logs
+      cat > /etc/opt/microsoft/omsagent/${WORKSPACE_ID}/conf/omsagent.d/apache.conf << EOF
+      <source>
+        type tail
+        path /var/log/apache2/access.log,/var/log/apache2/error.log
+        pos_file /var/opt/microsoft/omsagent/${WORKSPACE_ID}/state/apache.pos
+        tag oms.apache
+        format apache2
+      </source>
+      
+      <filter oms.apache>
+        type filter_syslog
+      </filter>
+      EOF
+      
+      # Restart OMS agent
+      systemctl restart omsagent-${WORKSPACE_ID}
+
+  # Security hardening script
+  - path: /usr/local/bin/security-hardening.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      
+      echo "Starting security hardening..."
+      
+      # SSH Hardening
+      sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+      sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+      sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+      echo "AllowUsers swissre swissreadmin" >> /etc/ssh/sshd_config
+      systemctl restart sshd
+      
+      # Kernel hardening
+      cat >> /etc/sysctl.conf << EOF
+      # IP Spoofing protection
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      # Ignore ICMP redirects
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv6.conf.all.accept_redirects = 0
+      # Ignore send redirects
+      net.ipv4.conf.all.send_redirects = 0
+      # Disable source packet routing
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv6.conf.all.accept_source_route = 0
+      # Log Martians
+      net.ipv4.conf.all.log_martians = 1
+      # Ignore ICMP ping requests
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      # SYN flood protection
+      net.ipv4.tcp_syncookies = 1
+      net.ipv4.tcp_synack_retries = 2
+      EOF
+      sysctl -p
+      
+      # Configure fail2ban
+      cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
+      systemctl enable fail2ban
+      systemctl start fail2ban
+      
+      # Setup AIDE
+      aideinit
+      mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+      
+      echo "Security hardening completed"
+
+  # Apache index page
+  - path: /data/www/html/index.html
+    owner: www-data:www-data
+    permissions: '0644'
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Swiss Re Infrastructure Challenge - Version 3</title>
+          <style>
+              body {
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                  color: white;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  height: 100vh;
+                  margin: 0;
+              }
+              .container {
+                  text-align: center;
+                  padding: 2rem;
+                  background: rgba(255, 255, 255, 0.1);
+                  border-radius: 10px;
+                  backdrop-filter: blur(10px);
+              }
+              h1 { font-size: 2.5rem; margin-bottom: 1rem; }
+              .status { 
+                  display: inline-block;
+                  padding: 0.5rem 1rem;
+                  background: #4CAF50;
+                  border-radius: 20px;
+                  margin: 0.5rem;
+              }
+              .info { margin: 1rem 0; font-size: 1.1rem; }
+              .version { 
+                  font-size: 0.9rem;
+                  opacity: 0.8;
+                  margin-top: 2rem;
+              }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🏗️ Swiss Re Infrastructure Challenge</h1>
+              <div class="status">✅ SECURE HTTPS CONNECTION</div>
+              <div class="status">✅ VERSION 3 - ENTERPRISE</div>
+              <div class="info">
+                  <p>🔒 Protected by Azure Firewall</p>
+                  <p>🔑 Secured with Key Vault</p>
+                  <p>📊 Monitored with Log Analytics</p>
+                  <p>🛡️ Zero Trust Architecture</p>
+              </div>
+              <div class="version">
+                  Deployed on: $(date)<br>
+                  Server: Apache/2.4 on Ubuntu 22.04 LTS<br>
+                  TLS: v1.2+ | Location: West Europe
+              </div>
+          </div>
+      </body>
+      </html>
+
+# Commands to run
+runcmd:
+  # Create required directories
+  - mkdir -p /data/www/html
+  - mkdir -p /data/logs
+  - mkdir -p /data/backups
+  
+  # Set proper permissions
+  - chown -R www-data:www-data /data/www
+  - chmod -R 755 /data/www
+  
+  # Install Python packages for Key Vault
+  - pip3 install requests azure-identity azure-keyvault-secrets
+  
+  # Configure UFW firewall
+  - ufw --force enable
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw reload
+  
+  # Run security hardening
+  - /usr/local/bin/security-hardening.sh
+  
+  # Setup Apache
+  - a2enmod ssl
+  - a2enmod headers
+  - a2enmod rewrite
+  - a2enmod security2
+  - a2enmod evasive
+  
+  # Retrieve secrets from Key Vault (Version 3)
+  - export KEY_VAULT_NAME=$(curl -H Metadata:true "http://169.254.169.254/metadata/instance/compute/tags?api-version=2021-01-01" | jq -r '.keyVaultName // "kv-swissre-prod"')
+  - python3 /usr/local/bin/keyvault-retriever.py || true
+  
+  # Configure Apache site
+  - a2dissite 000-default
+  - a2ensite swissre-ssl
+  - systemctl restart apache2
+  
+  # Setup monitoring (if workspace credentials available)
+  - |
+    if [ ! -z "${WORKSPACE_ID}" ] && [ ! -z "${WORKSPACE_KEY}" ]; then
+      /usr/local/bin/setup-monitoring.sh
+    fi
+  
+  # Start services
+  - systemctl enable apache2
+  - systemctl enable ufw
+  - systemctl enable fail2ban
+  
+  # Final security check
+  - aa-enforce /etc/apparmor.d/* || true
+  - systemctl restart apparmor || true
+  
+  # Log completion
+  - echo "Cloud-init Version 3 completed at $(date)" >> /var/log/cloud-init-custom.log
+
+# Final reboot to ensure all settings are applied
+power_state:
+  mode: reboot
+  message: Rebooting to apply all security settings
+  timeout: 30
+  condition: True
