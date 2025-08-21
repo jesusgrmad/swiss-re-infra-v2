@@ -1,0 +1,242 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - infrastructure/*
+      - scripts/*
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  - group: SwissRe-Infrastructure
+  - name: azureServiceConnection
+    value: 'SwissRe-Azure-Connection'
+  - name: location
+    value: 'westeurope'
+  - name: projectName
+    value: 'SwissRe'
+
+stages:
+  - stage: Validate
+    displayName: 'Validate Infrastructure'
+    jobs:
+      - job: ValidateBicep
+        displayName: 'Validate Bicep Templates'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Install Bicep'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az bicep upgrade
+                az bicep version
+                
+          - task: AzureCLI@2
+            displayName: 'Validate Templates'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Validate main template
+                az bicep build --file infrastructure/main.bicep
+                
+                # Validate all modules
+                for module in infrastructure/modules/*.bicep; do
+                  echo "Validating $(basename $module)..."
+                  az bicep build --file "$module"
+                done
+                
+                # Check for warnings
+                output=$(az bicep build --file infrastructure/main.bicep 2>&1)
+                if echo "$output" | grep -i "warning"; then
+                  echo "##vso[task.logissue type=error]Warnings found in Bicep templates"
+                  exit 1
+                fi
+                
+          - task: PublishTestResults@2
+            displayName: 'Publish Validation Results'
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/TEST-*.xml'
+              
+  - stage: DeployDev
+    displayName: 'Deploy to Development'
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    variables:
+      environment: 'dev'
+      resourceGroup: 'rg-swissre-dev'
+      deploymentVersion: '3'
+    jobs:
+      - deployment: DeployInfrastructure
+        displayName: 'Deploy Infrastructure'
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'Development'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                
+                - task: AzureCLI@2
+                  displayName: 'Create Resource Group'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az group create \
+                        --name $(resourceGroup) \
+                        --location $(location) \
+                        --tags Environment=$(environment) Project=$(projectName)
+                        
+                - task: AzureResourceManagerTemplateDeployment@3
+                  displayName: 'Deploy Bicep Template'
+                  inputs:
+                    deploymentScope: 'Resource Group'
+                    azureResourceManagerConnection: $(azureServiceConnection)
+                    subscriptionId: $(subscriptionId)
+                    action: 'Create Or Update Resource Group'
+                    resourceGroupName: $(resourceGroup)
+                    location: $(location)
+                    templateLocation: 'Linked artifact'
+                    csmFile: 'infrastructure/main.bicep'
+                    csmParametersFile: 'infrastructure/parameters/$(environment).json'
+                    overrideParameters: '-deploymentVersion $(deploymentVersion)'
+                    deploymentMode: 'Complete'
+                    
+                - task: Bash@3
+                  displayName: 'Run Smoke Tests'
+                  inputs:
+                    targetType: 'filePath'
+                    filePath: 'scripts/test-deployment.sh'
+                    arguments: '$(environment)'
+                    
+  - stage: DeployTest
+    displayName: 'Deploy to Test'
+    dependsOn: DeployDev
+    condition: succeeded()
+    variables:
+      environment: 'test'
+      resourceGroup: 'rg-swissre-test'
+      deploymentVersion: '3'
+    jobs:
+      - deployment: DeployInfrastructure
+        displayName: 'Deploy Infrastructure'
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'Test'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                
+                - template: templates/deploy-infrastructure.yml
+                  parameters:
+                    environment: $(environment)
+                    resourceGroup: $(resourceGroup)
+                    deploymentVersion: $(deploymentVersion)
+                    
+                - task: Bash@3
+                  displayName: 'Run Integration Tests'
+                  inputs:
+                    targetType: 'filePath'
+                    filePath: 'scripts/run-tests.sh'
+                    arguments: 'integration $(environment)'
+                    
+  - stage: DeployProd
+    displayName: 'Deploy to Production'
+    dependsOn: DeployTest
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    variables:
+      environment: 'prod'
+      resourceGroup: 'rg-swissre-prod'
+      deploymentVersion: '3'
+    jobs:
+      - job: Approval
+        displayName: 'Wait for Approval'
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            timeoutInMinutes: 1440
+            inputs:
+              notifyUsers: 'jesus.gracia@swissre.com'
+              instructions: 'Please review and approve production deployment'
+              
+      - deployment: DeployInfrastructure
+        displayName: 'Deploy Infrastructure'
+        dependsOn: Approval
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'Production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                
+                - task: AzureCLI@2
+                  displayName: 'Backup Current Infrastructure'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: 'bash'
+                    scriptLocation: 'filePath'
+                    scriptPath: 'scripts/create-backup.sh'
+                    arguments: '$(environment)'
+                    
+                - template: templates/deploy-infrastructure.yml
+                  parameters:
+                    environment: $(environment)
+                    resourceGroup: $(resourceGroup)
+                    deploymentVersion: $(deploymentVersion)
+                    
+                - task: AzureCLI@2
+                  displayName: 'Configure Production Settings'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      # Configure firewall
+                      ./scripts/configure-firewall.sh $(environment)
+                      
+                      # Configure SSL (v2+)
+                      if [ $(deploymentVersion) -ge 2 ]; then
+                        ./scripts/configure-ssl.sh $(environment)
+                      fi
+                      
+                      # Configure Key Vault (v3)
+                      if [ $(deploymentVersion) -eq 3 ]; then
+                        ./scripts/configure-keyvault.sh $(environment)
+                      fi
+                      
+                - task: Bash@3
+                  displayName: 'Run All Tests'
+                  inputs:
+                    targetType: 'inlineScript'
+                    script: |
+                      ./scripts/run-tests.sh smoke $(environment)
+                      ./scripts/run-tests.sh integration $(environment)
+                      ./scripts/run-tests.sh security $(environment)
+                      ./scripts/run-tests.sh performance $(environment)
+                      
+                - task: PublishTestResults@2
+                  displayName: 'Publish Test Results'
+                  inputs:
+                    testResultsFormat: 'JUnit'
+                    testResultsFiles: '**/test-results/*.xml'
+                    mergeTestResults: true
