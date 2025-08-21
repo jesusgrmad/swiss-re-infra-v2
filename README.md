@@ -117,7 +117,7 @@ Network Flow:
 
 ### One-Command Deployment
 
-    git clone https://github.com/jesusgrmad/swissre.git && cd swissre && ./scripts/deploy.sh prod 3
+    git clone https://github.com/jesusgrmad/swiss-re-infra-v2.git && cd swissre && ./scripts/deploy.sh prod 3
 
 ### Step-by-Step Deployment
 
