@@ -1,23 +1,116 @@
 ﻿#cloud-config
-# Swiss Re Cloud-Init V1
-# Author: Jesus Gracia
+# Swiss Re Infrastructure - Version 1: Basic Configuration
+# Ubuntu 22.04 LTS with security hardening
 
-hostname: vm-swissre-v1
 package_update: true
 package_upgrade: true
+package_reboot_if_required: true
 
 packages:
-  - curl
-  - wget
-  - vim
   - ufw
   - fail2ban
+  - unattended-upgrades
+  - curl
+  - wget
+  - net-tools
+  - htop
+  - vim
+  - git
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/hardening.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication yes
+      PubkeyAuthentication yes
+      X11Forwarding no
+      MaxAuthTries 3
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      AllowUsers swissreadmin
+    permissions: '0644'
+
+  - path: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      bantime = 3600
+      findtime = 600
+      maxretry = 5
+      
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+    permissions: '0644'
+
+  - path: /etc/sysctl.d/99-security.conf
+    content: |
+      # IP Spoofing protection
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      
+      # Ignore ICMP redirects
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv6.conf.all.accept_redirects = 0
+      
+      # Ignore send redirects
+      net.ipv4.conf.all.send_redirects = 0
+      
+      # Disable source packet routing
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv6.conf.all.accept_source_route = 0
+      
+      # Log Martians
+      net.ipv4.conf.all.log_martians = 1
+      
+      # Ignore ICMP ping requests
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      
+      # SYN flood protection
+      net.ipv4.tcp_syncookies = 1
+      net.ipv4.tcp_syn_retries = 2
+      net.ipv4.tcp_synack_retries = 2
+      net.ipv4.tcp_max_syn_backlog = 4096
+    permissions: '0644'
 
 runcmd:
-  - ufw --force enable
+  # Configure UFW firewall
   - ufw default deny incoming
   - ufw default allow outgoing
-  - ufw allow from 10.0.0.0/16 to any port 22
-  - echo 'Cloud-init V1 complete' > /var/log/cloud-init-complete
+  - ufw allow from 10.0.2.0/27 to any port 22 comment 'SSH from Bastion'
+  - ufw --force enable
+  
+  # Apply sysctl settings
+  - sysctl -p /etc/sysctl.d/99-security.conf
+  
+  # Start and enable services
+  - systemctl restart sshd
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  
+  # Configure unattended upgrades
+  - dpkg-reconfigure -plow unattended-upgrades
+  
+  # Set timezone
+  - timedatectl set-timezone UTC
+  
+  # Create monitoring script
+  - |
+    cat > /usr/local/bin/health-check.sh << 'EOF'
+    #!/bin/bash
+    echo "System Health Check - $(date)"
+    echo "==================="
+    echo "Hostname: $(hostname)"
+    echo "Uptime: $(uptime)"
+    echo "Memory: $(free -h | grep Mem)"
+    echo "Disk: $(df -h | grep /dev/root)"
+    echo "Network: $(ip -4 addr show | grep inet | grep -v 127.0.0.1)"
+    echo "Firewall: $(ufw status | head -1)"
+    EOF
+  - chmod +x /usr/local/bin/health-check.sh
+  
+  # Log deployment
+  - echo "Version 1 deployment completed at $(date)" > /var/log/deployment.log
 
-final_message: 'Swiss Re VM V1 ready'
+final_message: "Swiss Re Infrastructure Version 1 - Deployment Complete"
