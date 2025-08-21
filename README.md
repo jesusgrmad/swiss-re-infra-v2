@@ -236,7 +236,7 @@ All Swiss Re requirements have been successfully implemented:
 
 ## 🚀 Quick Start
 
-### One-Command Deployment
+### One-Command Deployment (Make)
 
     # Clone, setup, and deploy in one command
     git clone https://github.com/swissre/infrastructure-challenge.git && \
@@ -244,7 +244,7 @@ All Swiss Re requirements have been successfully implemented:
     make setup && \
     make deploy ENV=dev DEPLOYMENT_VERSION=3
 
-### Step-by-Step Deployment
+### Step-by-Step Deployment (Make)
 
     # 1. Clone the repository
     git clone https://github.com/swissre/infrastructure-challenge.git
@@ -267,6 +267,15 @@ All Swiss Re requirements have been successfully implemented:
 
     # 7. Check status
     make status
+
+### Standard Deployment Process
+
+    Pre-Checks → Backup → Validate → Deploy → Test → Success?
+                                                        ↓ No
+                                                    Rollback
+                                                        ↓
+                                                    Investigate
+    Success? Yes → Monitor → Document
 
 ---
 
@@ -333,7 +342,7 @@ All Swiss Re requirements have been successfully implemented:
 
 ## 🚁 Deployment
 
-### Using Makefile (Recommended)
+### Using Makefile
 
     # Deploy to Development
     make deploy ENV=dev DEPLOYMENT_VERSION=3
@@ -368,7 +377,30 @@ All Swiss Re requirements have been successfully implemented:
       --template-file infrastructure/main.bicep \
       --parameters @infrastructure/parameters.dev.json \
       --parameters deploymentVersion=3
+      
+### Main Deployment Script (deploy.sh)
 
+    #!/bin/bash
+    set -euo pipefail
+
+    ENVIRONMENT=$1
+    VERSION=$2
+    RESOURCE_GROUP="rg-swissre-$ENVIRONMENT"
+
+    echo "Deploying SwissRe Infrastructure v$VERSION to $ENVIRONMENT"
+
+    # Validate
+    az bicep build --file infrastructure/main.bicep
+
+    # Deploy
+    az deployment group create \
+      --resource-group $RESOURCE_GROUP \
+      --template-file infrastructure/main.bicep \
+      --parameters @infrastructure/parameters/$ENVIRONMENT.json \
+      --parameters deploymentVersion=$VERSION
+
+    echo "Deployment completed successfully!"
+    
 ### CI/CD Pipeline Deployment
 
 The repository includes automated pipelines:
