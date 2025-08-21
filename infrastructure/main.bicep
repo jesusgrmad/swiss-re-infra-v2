@@ -1,74 +1,81 @@
-/*
-################################################################################
-# Swiss Re Infrastructure Challenge - Main Bicep Template
-# Author: Jesus Gracia
-# Date: August 18, 2025
-# Version: 3.0.0
-################################################################################
-*/
+// ============================================================================
+// Swiss Re Infrastructure Challenge - Main Bicep Template
+// Version: 3.0.0 | Author: Jesus Gracia | Date: 2025-08-21
+// Description: Main orchestrator for progressive deployment versions
+// ============================================================================
 
 targetScope = 'resourceGroup'
 
-// Parameters
-@description('Azure region for all resources')
-param location string = resourceGroup().location
+// ============================================================================
+// PARAMETERS
+// ============================================================================
 
-@description('Environment name for deployment')
-@allowed(['dev', 'test', 'prod'])
+@description('Azure region for all resources')
+@allowed([
+  'westeurope'
+  'northeurope'
+  'switzerlandnorth'
+])
+param location string = 'westeurope'
+
+@description('Environment name')
+@allowed([
+  'dev'
+  'test'
+  'prod'
+])
 param environment string = 'dev'
 
-@description('Deployment version controlling feature set')
+@description('Deployment version (1: Basic, 2: Web, 3: Enterprise)')
 @allowed([1, 2, 3])
 param deploymentVersion int = 3
 
-@description('Administrator username for the VM')
+@description('Admin username for the VM')
 @minLength(5)
 @maxLength(20)
-param adminUsername string = 'azureadmin'
+param adminUsername string = 'swissreadmin'
 
-@description('Administrator password for the VM')
+@description('Admin password for the VM')
 @secure()
 @minLength(12)
 param adminPassword string
 
-@description('Size of the virtual machine')
-param vmSize string = environment == 'prod' ? 'Standard_D2s_v3' : 'Standard_B2s'
-
-@description('Resource tags for governance')
+@description('Tags to apply to all resources')
 param tags object = {
   Environment: environment
+  Project: 'SwissRe-Challenge'
+  Version: '${deploymentVersion}.0'
   ManagedBy: 'Bicep'
-  Author: 'Jesus_Gracia'
-  Repository: 'swissre'
-  Version: string(deploymentVersion)
-  DeploymentDate: utcNow('yyyy-MM-dd')
+  Owner: 'Infrastructure-Team'
+  CreatedDate: utcNow('yyyy-MM-dd')
 }
 
-// Variables
-var uniqueSuffix = substring(uniqueString(resourceGroup().id), 0, 6)
-var vnetName = 'vnet-swissre-${environment}'
-var fwName = 'fw-swissre-${environment}'
-var bastionName = 'bastion-swissre-${environment}'
-var vmName = 'vm-swissre-${environment}'
-var nsgVmName = 'nsg-vms-${environment}'
-var nsgBastionName = 'nsg-bastion-${environment}'
-var rtName = 'rt-swissre-${environment}'
-var storageAccountName = toLower('st${environment}${uniqueSuffix}')
-var workspaceName = 'log-swissre-${environment}'
-var kvName = take('kv-${environment}-${uniqueSuffix}', 24)
-var identityName = 'id-swissre-${environment}'
+// ============================================================================
+// VARIABLES
+// ============================================================================
 
-// Modules
-module nsg 'modules/nsg.bicep' = {
-  name: 'deploy-nsg'
-  params: {
-    location: location
-    nsgVmName: nsgVmName
-    nsgBastionName: nsgBastionName
-    tags: tags
-  }
-}
+var resourcePrefix = 'swissre'
+var vnetName = 'vnet-${resourcePrefix}-${environment}'
+var firewallName = 'fw-${resourcePrefix}-${environment}'
+var bastionName = 'bastion-${resourcePrefix}-${environment}'
+var vmName = 'vm-${resourcePrefix}-${environment}'
+var nsgName = 'nsg-vms'
+var routeTableName = 'rt-force-firewall'
 
+// Key Vault and Storage (Version 3)
+var keyVaultName = 'kv-${resourcePrefix}-${environment}-${uniqueString(resourceGroup().id)}'
+var storageAccountName = 'st${resourcePrefix}${environment}${uniqueString(resourceGroup().id)}'
+var logAnalyticsName = 'log-${resourcePrefix}-${environment}'
+
+// Version-specific configurations
+var enableWebServices = deploymentVersion >= 2
+var enableEnterprise = deploymentVersion >= 3
+
+// ============================================================================
+// MODULE DEPLOYMENTS - VERSION 1 (BASIC INFRASTRUCTURE)
+// ============================================================================
+
+// Networking Module
 module networking 'modules/networking.bicep' = {
   name: 'deploy-networking'
   params: {
@@ -76,128 +83,140 @@ module networking 'modules/networking.bicep' = {
     vnetName: vnetName
     tags: tags
   }
-  dependsOn: [
-    nsg
-  ]
 }
 
+// Network Security Groups
+module nsg 'modules/nsg.bicep' = {
+  name: 'deploy-nsg'
+  params: {
+    location: location
+    nsgName: nsgName
+    tags: tags
+  }
+}
+
+// Route Table for Forced Tunneling
+module routeTable 'modules/routeTable.bicep' = {
+  name: 'deploy-routetable'
+  params: {
+    location: location
+    routeTableName: routeTableName
+    firewallPrivateIp: firewall.outputs.privateIpAddress
+    tags: tags
+  }
+}
+
+// Azure Firewall
 module firewall 'modules/firewall.bicep' = {
   name: 'deploy-firewall'
   params: {
     location: location
-    fwName: fwName
+    firewallName: firewallName
     subnetId: networking.outputs.firewallSubnetId
+    enableDnatRules: enableWebServices
     vmPrivateIp: '10.0.3.4'
-    deploymentVersion: deploymentVersion
     tags: tags
   }
-  dependsOn: [
-    networking
-  ]
 }
 
+// Azure Bastion
 module bastion 'modules/bastion.bicep' = {
   name: 'deploy-bastion'
   params: {
     location: location
     bastionName: bastionName
     subnetId: networking.outputs.bastionSubnetId
-    nsgId: nsg.outputs.nsgBastionId
-    tags: tags
-  }
-  dependsOn: [
-    networking
-    nsg
-  ]
-}
-
-module routeTable 'modules/routeTable.bicep' = {
-  name: 'deploy-routetable'
-  params: {
-    location: location
-    rtName: rtName
-    firewallPrivateIp: firewall.outputs.privateIp
-    vmSubnetId: networking.outputs.vmSubnetId
-    tags: tags
-  }
-  dependsOn: [
-    firewall
-    networking
-  ]
-}
-
-module storage 'modules/storage.bicep' = {
-  name: 'deploy-storage'
-  params: {
-    location: location
-    storageAccountName: storageAccountName
-    tags: tags
-  }
-  dependsOn: [
-    networking
-  ]
-}
-
-module monitoring 'modules/monitoring.bicep' = {
-  name: 'deploy-monitoring'
-  params: {
-    location: location
-    workspaceName: workspaceName
     tags: tags
   }
 }
 
-module keyvault 'modules/keyvault.bicep' = if (deploymentVersion == 3) {
-  name: 'deploy-keyvault'
-  params: {
-    location: location
-    kvName: kvName
-    tags: tags
-  }
-  dependsOn: [
-    networking
-  ]
-}
-
-module identity 'modules/identity.bicep' = if (deploymentVersion == 3) {
-  name: 'deploy-identity'
-  params: {
-    location: location
-    identityName: identityName
-    tags: tags
-  }
-}
-
+// Virtual Machine
 module vm 'modules/vm.bicep' = {
   name: 'deploy-vm'
   params: {
     location: location
     vmName: vmName
-    vmSize: vmSize
+    subnetId: networking.outputs.vmSubnetId
     adminUsername: adminUsername
     adminPassword: adminPassword
-    subnetId: networking.outputs.vmSubnetId
-    nsgId: nsg.outputs.nsgVmId
+    nsgId: nsg.outputs.nsgId
     deploymentVersion: deploymentVersion
-    managedIdentityId: deploymentVersion == 3 ? identity.outputs.identityId : ''
-    storageAccountUri: storage.outputs.primaryBlobEndpoint
+    keyVaultName: enableEnterprise ? keyVault.outputs.name : ''
+    storageAccountName: enableEnterprise ? storage.outputs.name : ''
+    logAnalyticsWorkspaceId: enableEnterprise ? monitoring.outputs.workspaceId : ''
     tags: tags
   }
   dependsOn: [
-    networking
-    nsg
     routeTable
-    storage
-    monitoring
   ]
 }
 
-// Outputs
+// ============================================================================
+// MODULE DEPLOYMENTS - VERSION 3 (ENTERPRISE FEATURES)
+// ============================================================================
+
+// Managed Identity (Version 3)
+module identity 'modules/identity.bicep' = if (enableEnterprise) {
+  name: 'deploy-identity'
+  params: {
+    location: location
+    vmName: vmName
+    tags: tags
+  }
+}
+
+// Key Vault (Version 3)
+module keyVault 'modules/keyvault.bicep' = if (enableEnterprise) {
+  name: 'deploy-keyvault'
+  params: {
+    location: location
+    keyVaultName: keyVaultName
+    tenantId: subscription().tenantId
+    adminObjectId: identity.outputs.principalId
+    subnetId: networking.outputs.privateEndpointSubnetId
+    tags: tags
+  }
+  dependsOn: [
+    identity
+  ]
+}
+
+// Storage Account (Version 3)
+module storage 'modules/storage.bicep' = if (enableEnterprise) {
+  name: 'deploy-storage'
+  params: {
+    location: location
+    storageAccountName: storageAccountName
+    subnetId: networking.outputs.privateEndpointSubnetId
+    tags: tags
+  }
+}
+
+// Log Analytics (Version 3)
+module monitoring 'modules/monitoring.bicep' = if (enableEnterprise) {
+  name: 'deploy-monitoring'
+  params: {
+    location: location
+    workspaceName: logAnalyticsName
+    tags: tags
+  }
+}
+
+// ============================================================================
+// OUTPUTS
+// ============================================================================
+
+output deploymentVersion int = deploymentVersion
+output vnetName string = networking.outputs.vnetName
 output vnetId string = networking.outputs.vnetId
-output firewallPublicIp string = firewall.outputs.publicIp
-output bastionFqdn string = bastion.outputs.fqdn
-output vmPrivateIp string = vm.outputs.privateIp
-output storageAccountName string = storage.outputs.name
-output workspaceId string = monitoring.outputs.workspaceId
-output keyVaultUri string = deploymentVersion == 3 ? keyvault.outputs.vaultUri : 'N/A'
-output deployedVersion int = deploymentVersion
+output firewallName string = firewall.outputs.name
+output firewallPublicIp string = firewall.outputs.publicIpAddress
+output bastionName string = bastion.outputs.name
+output vmName string = vm.outputs.vmName
+output vmPrivateIp string = vm.outputs.privateIpAddress
+
+// Version 3 Outputs
+output keyVaultName string = enableEnterprise ? keyVault.outputs.name : 'N/A'
+output keyVaultUri string = enableEnterprise ? keyVault.outputs.vaultUri : 'N/A'
+output storageAccountName string = enableEnterprise ? storage.outputs.name : 'N/A'
+output logAnalyticsWorkspaceId string = enableEnterprise ? monitoring.outputs.workspaceId : 'N/A'
