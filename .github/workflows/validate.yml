@@ -1,0 +1,100 @@
+name: Deploy to Development
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'infrastructure/**'
+      - 'scripts/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Deployment version (1, 2, or 3)'
+        required: true
+        default: '3'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+
+env:
+  ENVIRONMENT: dev
+  RESOURCE_GROUP: rg-swissre-dev
+  LOCATION: westeurope
+  DEPLOYMENT_VERSION: ${{ github.event.inputs.version || '3' }}
+
+jobs:
+  deploy:
+    name: Deploy Infrastructure to Dev
+    runs-on: ubuntu-latest
+    environment: development
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS_DEV }}
+          
+      - name: Create Resource Group
+        run: |
+          az group create \
+            --name ${{ env.RESOURCE_GROUP }} \
+            --location ${{ env.LOCATION }} \
+            --tags Environment=Dev Project=SwissRe Owner=JesusGracia
+            
+      - name: Validate Deployment
+        run: |
+          echo "🔍 Running what-if deployment..."
+          az deployment group what-if \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file infrastructure/main.bicep \
+            --parameters @infrastructure/parameters/dev.json \
+            --parameters deploymentVersion=${{ env.DEPLOYMENT_VERSION }}
+            
+      - name: Deploy Infrastructure
+        run: |
+          echo "🚀 Deploying version ${{ env.DEPLOYMENT_VERSION }} to Development..."
+          az deployment group create \
+            --name "deploy-dev-$(date +%Y%m%d-%H%M%S)" \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --template-file infrastructure/main.bicep \
+            --parameters @infrastructure/parameters/dev.json \
+            --parameters deploymentVersion=${{ env.DEPLOYMENT_VERSION }} \
+            --mode Complete
+            
+      - name: Run Smoke Tests
+        run: |
+          echo "🧪 Running smoke tests..."
+          ./scripts/test-deployment.sh ${{ env.ENVIRONMENT }}
+          
+      - name: Health Check
+        run: |
+          echo "❤️ Running health check..."
+          ./scripts/health-check.sh ${{ env.ENVIRONMENT }}
+          
+      - name: Configure Monitoring
+        if: env.DEPLOYMENT_VERSION == '3'
+        run: |
+          echo "📊 Configuring monitoring..."
+          ./scripts/configure-monitoring.sh ${{ env.ENVIRONMENT }}
+          
+      - name: Update Documentation
+        run: |
+          echo "## 🚀 Development Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** Development" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ env.DEPLOYMENT_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Resource Group:** ${{ env.RESOURCE_GROUP }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** Deployed ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- **Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Send Notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Dev deployment ${{ job.status }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
