@@ -1,25 +1,43 @@
-// Module: Azure Bastion
-// Author: Jesus Gracia
+// ============================================================================
+// Azure Bastion Module - Swiss Re Infrastructure
+// Standard SKU for secure VM access
+// ============================================================================
 
+@description('Azure region for resources')
 param location string
-param bastionName string
-param subnetId string
-param nsgId string
-param tags object = {}
 
-resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2023-06-01' = {
-  name: '${bastionName}-pip'
+@description('Bastion name')
+param bastionName string
+
+@description('Subnet ID for bastion')
+param subnetId string
+
+@description('Resource tags')
+param tags object
+
+// ============================================================================
+// PUBLIC IP ADDRESS
+// ============================================================================
+
+resource publicIp 'Microsoft.Network/publicIPAddresses@2023-05-01' = {
+  name: 'pip-${bastionName}'
   location: location
   tags: tags
   sku: {
     name: 'Standard'
+    tier: 'Regional'
   }
   properties: {
     publicIPAllocationMethod: 'Static'
+    publicIPAddressVersion: 'IPv4'
   }
 }
 
-resource bastion 'Microsoft.Network/bastionHosts@2023-06-01' = {
+// ============================================================================
+// AZURE BASTION
+// ============================================================================
+
+resource bastion 'Microsoft.Network/bastionHosts@2023-05-01' = {
   name: bastionName
   location: location
   tags: tags
@@ -27,24 +45,32 @@ resource bastion 'Microsoft.Network/bastionHosts@2023-06-01' = {
     name: 'Standard'
   }
   properties: {
+    scaleUnits: 2
+    enableTunneling: true
+    enableIpConnect: true
+    enableShareableLink: false
+    enableKerberos: false
+    disableCopyPaste: false
     ipConfigurations: [
       {
-        name: 'ipconfig'
+        name: 'ipconfig1'
         properties: {
           subnet: {
             id: subnetId
           }
           publicIPAddress: {
-            id: bastionPublicIp.id
+            id: publicIp.id
           }
         }
       }
     ]
-    enableTunneling: true
-    enableIpConnect: true
   }
 }
 
-output bastionId string = bastion.id
-output bastionName string = bastion.name
-output fqdn string = 'bastion.azure.com'
+// ============================================================================
+// OUTPUTS
+// ============================================================================
+
+output name string = bastion.name
+output id string = bastion.id
+output publicIpAddress string = publicIp.properties.ipAddress
